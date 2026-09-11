@@ -5,6 +5,7 @@ import { ethers } from "ethers";
 import Image from "next/image";
 import { AlertTriangle, ArrowLeft, ArrowUpRight, CircleHelp, CircleCheck, FilePenLine, LockKeyhole, MapPin, Search, ShieldCheck, Wallet, Zap } from "lucide-react";
 import MapView from "./components/MapView";
+import { decryptPanelEnvelope, encryptForPanel } from "./lib/disputeEvidence";
 import logo from "../assets/otu logo.png";
 
 const CONTRACT_ABI = [
@@ -26,12 +27,15 @@ const CONTRACT_ABI = [
   "function associateReportProperty(uint256 reportId, bytes32 propertyId)",
   "function corroborateReport(uint256 reportId)",
   "function registerArbitrator() payable",
+  "function setArbitratorEncryptionKey(string publicKey)",
+  "function arbitratorEncryptionKey(address) view returns (string)",
   "function withdrawArbitratorStake(uint256 amount)",
   "function arbitratorStake(address) view returns (uint256)",
   "function arbitratorWins(address) view returns (uint256)",
   "function arbitratorLosses(address) view returns (uint256)",
   "function openDispute(uint256 reportId) payable returns (uint256)",
   "function getDisputePanel(uint256 disputeId) view returns (address[])",
+  "function arbitratorEncryptionKey(address) view returns (string)",
   "function disputes(uint256) view returns (uint256 reportId, uint256 commitDeadline, uint256 revealDeadline, uint256 yesVotes, uint256 noVotes, uint256 rewardPool, bool resolved)",
   "function commitVote(uint256 disputeId, bytes32 commitment)",
   "function revealVote(uint256 disputeId, bool sellerValid, bytes32 salt)",
@@ -104,6 +108,16 @@ function encodeBase64(bytes) {
   return btoa(binary);
 }
 function decodeBase64(value) { return Uint8Array.from(atob(value), (character) => character.charCodeAt(0)); }
+async function getOrCreateArbitratorKey(address) {
+  const storageKey = `outta-the-units:arbitrator-key:${address.toLowerCase()}`;
+  const stored = localStorage.getItem(storageKey);
+  if (stored) return JSON.parse(stored).publicKey;
+  const pair = await crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const publicKey = encodeBase64(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const privateKey = encodeBase64(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+  localStorage.setItem(storageKey, JSON.stringify({ publicKey, privateKey }));
+  return publicKey;
+}
 function readDeliveryVault() {
   if (typeof window === "undefined") return [];
   return Object.keys(localStorage).filter((key) => key.startsWith(DELIVERY_VAULT_PREFIX)).map((key) => JSON.parse(localStorage.getItem(key))).filter(Boolean);
@@ -166,6 +180,8 @@ export default function Home() {
   const [arbitratorOpen, setArbitratorOpen] = useState(false);
   const [arbitratorStats, setArbitratorStats] = useState(null);
   const [arbitrationCases, setArbitrationCases] = useState([]);
+  const [disputeEvidenceText, setDisputeEvidenceText] = useState("");
+  const [reviewedEvidence, setReviewedEvidence] = useState([]);
   const [disputeForm, setDisputeForm] = useState({ id: "", vote: "true", salt: "" });
   const [sellerForm, setSellerForm] = useState({ property: "2301 Telegraph Ave", type: "Security deposit history", price: "0.01", deadline: "60", intelligence: "", evidence: "", evidenceFile: null, claimedAmount: "3800" });
   const [vaultItems, setVaultItems] = useState([]);
@@ -359,6 +375,10 @@ export default function Home() {
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       if (action === "register") await (await contract.registerArbitrator({ value: ethers.parseEther("0.01") })).wait();
+      if (action === "register-key") {
+        const publicKey = await getOrCreateArbitratorKey(account);
+        await (await contract.setArbitratorEncryptionKey(publicKey)).wait();
+      }
       if (action === "withdraw") await (await contract.withdrawArbitratorStake(ethers.parseEther("0.01"))).wait();
       if (action === "commit") {
         if (!disputeForm.salt) throw new Error("Enter a salt before committing.");
@@ -370,7 +390,7 @@ export default function Home() {
       if (action === "resolve-timeout") await (await contract.resolveUnrevealedDispute(disputeForm.id)).wait();
       if (action === "reward") await (await contract.claimArbitratorReward(disputeForm.id)).wait();
       await loadArbitratorStats();
-      setStatus("Arbitrator transaction confirmed.");
+      setStatus(action === "register-key" ? "Private review key saved. Selected panels can now encrypt evidence for this wallet." : "Arbitrator transaction confirmed.");
     } catch (error) { setStatus(error.shortMessage || error.message || "Arbitrator transaction failed."); }
     finally { setBusy(false); }
   }
@@ -561,6 +581,43 @@ export default function Home() {
     finally { setBusy(false); }
   }
 
+  async function disputeEvidenceAuthorization(action, disputeId) {
+    const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
+    const address = await signer.getAddress(); const timestamp = Date.now();
+    const message = `Outta the Units dispute evidence ${action}\nDispute ID: ${disputeId}\nIssued at: ${timestamp}`;
+    return { address, timestamp, signature: await signer.signMessage(message) };
+  }
+
+  async function submitDisputeEvidence() {
+    if (!disputeForm.id || !disputeEvidenceText.trim() || !activeReport) { setStatus("Enter a dispute ID and a short explanation first."); return; }
+    setBusy(true);
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+      const panel = await contract.getDisputePanel(disputeForm.id);
+      const recipients = await Promise.all(panel.map(async (address) => ({ address, publicKey: await contract.arbitratorEncryptionKey(address) })));
+      if (recipients.some((item) => !item.publicKey)) throw new Error("A selected arbitrator has not set a private review key yet.");
+      const authorization = await disputeEvidenceAuthorization("submit", disputeForm.id);
+      const side = activeReport.buyer?.toLowerCase() === authorization.address.toLowerCase() ? "buyer" : "seller";
+      const encryptedPackage = { envelopes: await encryptForPanel({ side, reportId: activeReport.id, statement: disputeEvidenceText.trim() }, recipients) };
+      const response = await fetch("/api/disputes/evidence", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ disputeId: disputeForm.id, side, encryptedPackage, authorization }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || "Could not submit private evidence.");
+      setStatus("Private case statement sent to the selected review panel."); setDisputeEvidenceText("");
+    } catch (error) { setStatus(error.message || "Could not submit private evidence."); } finally { setBusy(false); }
+  }
+
+  async function reviewDisputeEvidence() {
+    if (!disputeForm.id || !account) return;
+    try {
+      const authorization = await disputeEvidenceAuthorization("retrieve", disputeForm.id);
+      const query = new URLSearchParams({ disputeId: disputeForm.id, address: authorization.address, timestamp: String(authorization.timestamp), signature: authorization.signature });
+      const response = await fetch(`/api/disputes/evidence?${query}`); const result = await response.json(); if (!response.ok) throw new Error(result.error || "No private evidence available.");
+      const stored = JSON.parse(localStorage.getItem(`outta-the-units:arbitrator-key:${account.toLowerCase()}`) || "null"); if (!stored?.privateKey) throw new Error("Set your private review key on this browser first.");
+      const evidence = await Promise.all(result.packages.map(async (item) => { const envelope = item.encryptedPackage.envelopes.find((entry) => entry.recipient === account.toLowerCase()); return envelope ? decryptPanelEnvelope(envelope, stored.privateKey) : null; }));
+      setReviewedEvidence(evidence.filter(Boolean));
+    } catch (error) { setStatus(error.message || "Could not open private evidence."); }
+  }
+
   function downloadDeliveryPackage(item) {
     const blob = new Blob([JSON.stringify(item)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -718,7 +775,9 @@ export default function Home() {
             <div className="detail-grid"><div><span className="meta-label">Your deposit</span><span className="meta-value">{arbitratorStats?.stake || "0"} ETH</span></div><div><span className="meta-label">Votes with majority</span><span className="meta-value">{arbitratorStats?.wins || "0"}</span></div><div><span className="meta-label">Missed / minority votes</span><span className="meta-value">{arbitratorStats?.losses || "0"}</span></div></div>
             <div className="section-head"><h3 className="section-title">Open arbitration cases</h3><span className="section-count">{arbitrationCases.length}</span></div>
             {arbitrationCases.length ? arbitrationCases.map((item) => <button className="vault-item" key={item.id} onClick={() => setDisputeForm((current) => ({ ...current, id: String(item.id) }))}><div><span className="meta-label">Dispute #{item.id} · Report #{item.reportId}</span><strong>{item.phase}{item.selected ? " · You are selected" : ""}</strong><span>Commit ends {new Date(item.commitDeadline * 1000).toLocaleTimeString()} · Reveal ends {new Date(item.revealDeadline * 1000).toLocaleTimeString()}</span></div></button>) : <p className="seller-intro">No open disputes. Refresh this console after a buyer opens one.</p>}
-            <div className="seller-costs"><button className="primary-button" disabled={busy} onClick={() => runArbitratorAction("register")}>Stake 0.01 ETH</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("withdraw")}>Withdraw 0.01 ETH</button></div>
+            <div className="seller-costs"><button className="primary-button" disabled={busy} onClick={() => runArbitratorAction("register")}>Stake 0.01 ETH</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("register-key")}>Set private review key</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("withdraw")}>Withdraw 0.01 ETH</button></div>
+            <button className="vault-action" disabled={busy || !disputeForm.id} onClick={reviewDisputeEvidence}>Open private case evidence</button>
+            {reviewedEvidence.map((item, index) => <div className="decrypted-report" key={index}><span className="meta-label">Private {item.side} statement</span><p>{item.statement}</p></div>)}
             <div className="seller-form"><label>Dispute ID<input value={disputeForm.id} onChange={(event) => setDisputeForm((current) => ({ ...current, id: event.target.value }))} placeholder="0" /></label><label>Vote<select value={disputeForm.vote} onChange={(event) => setDisputeForm((current) => ({ ...current, vote: event.target.value }))}><option value="true">Seller valid</option><option value="false">Seller invalid</option></select></label><label>Vote salt<div className="form-row"><input value={disputeForm.salt} onChange={(event) => setDisputeForm((current) => ({ ...current, salt: event.target.value }))} placeholder="0x... bytes32" /><button className="vault-action" type="button" onClick={() => setDisputeForm((current) => ({ ...current, salt: ethers.hexlify(crypto.getRandomValues(new Uint8Array(32))) }))}>Generate</button></div></label><div className="seller-costs"><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("commit")}>Commit vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reveal")}>Reveal vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve")}>Resolve panel</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve-timeout")}>Resolve missed votes</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reward")}>Claim reward</button></div></div>
             {status && <div className="status"><Zap size={11} /> {status}</div>}
           </div> : !selectedProperty ? <div className="discovery-view">
@@ -740,6 +799,7 @@ export default function Home() {
             {activeReport?.state === "Delivered" && activeReport.buyer?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("dispute")}>Open dispute · stake 0.001 ETH</button>}
             {activeReport?.state === "Purchased" && activeReport.buyer?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("refund")}>Claim missed-delivery refund</button>}
             {activeReport?.state === "Settled" && activeReport.sellerAddress?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("truth")}>Claim truth bond</button>}
+            {activeReport?.state === "Disputed" && (activeReport.buyer?.toLowerCase() === account.toLowerCase() || activeReport.sellerAddress?.toLowerCase() === account.toLowerCase()) && <div className="seller-form"><label>Dispute ID<input value={disputeForm.id} onChange={(event) => setDisputeForm((current) => ({ ...current, id: event.target.value }))} placeholder="Enter the dispute ID" /></label><label>Private case statement<textarea value={disputeEvidenceText} onChange={(event) => setDisputeEvidenceText(event.target.value)} placeholder="Explain what happened and what you want the panel to consider." rows="3" /></label><button className="vault-action" disabled={busy} onClick={submitDisputeEvidence}>Send private statement to panel</button></div>}
             {activeReport && <div className="detail-panel"><div className="detail-head"><div><h3 className="detail-title">{activeReport.title}</h3><span className="detail-id">REPORT #{String(activeReport.id + 17).padStart(4, "0")}</span></div><LockKeyhole className="lock-icon" size={16} /></div><div className="locked-content"><LockKeyhole size={19} color="#bdc7ff" /><p>The report contents stay encrypted until payment settles. You can inspect its provenance, not the private experience.</p></div><div className="detail-grid"><div><span className="meta-label">Seller</span><span className="meta-value">{activeReport.seller || "0x7c...e91a"}</span></div><div><span className="meta-label">Created</span><span className="meta-value">31 days ago</span></div><div><span className="meta-label">Seller stake</span><span className="meta-value">{activeReport.stake || "0.035 ETH"}</span></div><div><span className="meta-label">On-chain state</span><span className="meta-value">{activeReport.state || "Listed"}</span></div></div><div className="detail-grid"><div style={{ gridColumn: "1 / -1" }}><span className="meta-label">Evidence commitment</span><span className="commitment">{activeReport.commitment}</span></div></div><button className="vault-action" disabled={busy || !account} onClick={async () => { try { const provider = new ethers.BrowserProvider(window.ethereum); const signer = await provider.getSigner(); const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, CONTRACT_ABI, signer); await (await contract.corroborateReport(activeReport.id)).wait(); setStatus("Corroboration recorded on-chain."); } catch (error) { setStatus(error.shortMessage || error.message || "Could not corroborate report."); } }}>Corroborate this report</button>{activeReport.state === "Delivered" || activeReport.state === "Settled" ? <button className="primary-button" disabled={busy} onClick={decryptSelectedReport}>Decrypt and verify package locally<LockKeyhole size={14} /></button> : <button className="primary-button" disabled={busy} onClick={purchaseReport}>{busy ? "Confirming escrow..." : account ? `Buy encrypted report · ${activeReport.price}` : "Connect wallet to purchase"}<ArrowUpRight size={14} /></button>}{decryptedReport && <div className="decrypted-report"><span className="meta-label">Decrypted locally</span><strong>{decryptedReport.type}</strong><p>{decryptedReport.intelligence}</p><small>Evidence and delivery commitments matched before decryption.</small>{activeReport.state === "Delivered" && <button className="vault-action" disabled={busy} onClick={confirmReportDelivery}>Confirm delivery and release escrow</button>}</div>}{status && <div className="status"><Zap size={11} /> {status}</div>}</div>}
           </div>}
           <p className="disclaimer"><CircleHelp size={11} style={{ verticalAlign: "-2px" }} /> Information is sourced from current and former tenants. Evidence-backed does not mean objectively complete. Purchased reports can be copied after disclosure.</p>

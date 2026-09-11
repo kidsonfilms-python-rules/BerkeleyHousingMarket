@@ -63,6 +63,7 @@ contract OuttaTheUnits {
     mapping(address => uint256) public arbitratorLockedStake;
     mapping(address => uint256) public arbitratorWins;
     mapping(address => uint256) public arbitratorLosses;
+    mapping(address => string) private arbitratorEncryptionKeys;
     mapping(address => uint256) public sellerResolvedReports;
     mapping(address => uint256) public sellerInvalidReports;
     Groth16Verifier public immutable claimVerifier;
@@ -108,6 +109,17 @@ contract OuttaTheUnits {
         if (arbitratorStake[msg.sender] == 0) arbitrators.push(msg.sender);
         arbitratorStake[msg.sender] += msg.value;
         emit ArbitratorRegistered(msg.sender, msg.value);
+    }
+
+    /// @notice Registers the arbitrator's X25519 public key for private panel evidence.
+    function setArbitratorEncryptionKey(string calldata publicKey) external {
+        require(arbitratorStake[msg.sender] >= MIN_ARBITRATOR_STAKE, "register arbitrator first");
+        require(bytes(publicKey).length > 0 && bytes(publicKey).length <= 256, "invalid public key");
+        arbitratorEncryptionKeys[msg.sender] = publicKey;
+    }
+
+    function arbitratorEncryptionKey(address arbitrator) external view returns (string memory) {
+        return arbitratorEncryptionKeys[arbitrator];
     }
 
     function withdrawArbitratorStake(uint256 amount) external {

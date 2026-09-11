@@ -145,12 +145,12 @@ describe("OuttaTheUnits", function () {
       await contract.connect(arbitrator).commitVote(0, ethers.keccak256(encodedVote));
     }
 
-    await ethers.provider.send("evm_increaseTime", [DAY + 1]);
+    await ethers.provider.send("evm_increaseTime", [5 * 60 + 1]);
     await ethers.provider.send("evm_mine");
     for (const { arbitrator, salt } of salts) {
       await contract.connect(arbitrator).revealVote(0, true, salt);
     }
-    await ethers.provider.send("evm_increaseTime", [DAY + 1]);
+    await ethers.provider.send("evm_increaseTime", [5 * 60 + 1]);
     await ethers.provider.send("evm_mine");
     await contract.resolveDispute(0);
 
