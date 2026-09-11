@@ -1,0 +1,37 @@
+{
+  "name": "outta-the-units",
+  "private": true,
+  "version": "0.1.0",
+  "description": "On-chain escrow and provenance for private Berkeley housing intelligence.",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "zk:build": "node scripts/build-zk.js",
+    "zk:smoke": "node scripts/zk-smoke.js",
+    "seed:sepolia": "node scripts/seed-sepolia.js",
+    "cli": "node scripts/cli.js",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:base-sepolia": "hardhat run scripts/deploy.js --network baseSepolia"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "circom2": "^0.2.23",
+    "circomlib": "^2.0.5",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.22.10",
+    "next": "^15.5.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "snarkjs": "^0.7.6"
+  },
+  "dependencies": {
+    "circomlibjs": "^0.1.7",
+    "ethers": "^6.15.0",
+    "lucide-react": "^0.468.0",
+    "mapbox-gl": "^3.15.0",
+    "poseidon-lite": "^0.3.0"
+  }
+}
