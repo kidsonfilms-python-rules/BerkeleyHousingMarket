@@ -805,7 +805,7 @@ export default function Home() {
             {properties.length > 0 ? <div className="place-list">{properties.map((property) => <button key={property.id} className="place-card" onClick={() => selectProperty(property)}><div className="place-card-top"><div><span className="place-neighborhood">{property.neighborhood}</span><h4>{property.address}</h4></div><ArrowUpRight size={15} /></div><div className="place-card-meta"><span>{property.beds}</span><strong>{property.rent}{property.rent === "On-chain" ? "" : <small> / mo</small>}</strong></div><div className="place-card-foot"><span><ShieldCheck size={11} /> {property.reports} {backend.state === "connected" ? "on-chain report" : "reports"}</span><span>{property.freshness}</span></div></button>)}</div> : <div className="locked-content"><LockKeyhole size={19} color="#bdc7ff" /><p>No listings have been written to this contract yet.</p></div>}
           </div> : <div className="details-view">
             <button className="back-button" onClick={clearSelection}><ArrowLeft size={14} /> All nearby places</button>
-            <div className="panel-kicker"><span><span className="pulse" /> Property selected</span><span>UNIT 04</span></div>
+            <div className="panel-kicker"><span><span className="pulse" /> Property selected</span><span>RENTED</span></div>
             <h2 className="property-name">{selectedProperty.address}</h2>
             <div className="property-meta">{selectedProperty.neighborhood.toUpperCase()} · {selectedProperty.beds.toUpperCase()}</div>
             <div className="rent-row"><span className="rent">{selectedProperty.rent}</span><span className="rent-note">state</span></div>
