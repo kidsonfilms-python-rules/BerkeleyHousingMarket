@@ -10,6 +10,7 @@ import logo from "../assets/otu logo.png";
 const CONTRACT_ABI = [
   "function reports(uint256) view returns (address seller, address buyer, uint256 price, uint256 truthBond, uint256 deliveryBond, uint256 deliveryDeadline, uint256 challengePeriod, uint256 challengeEndsAt, bytes32 reportCommitment, bytes32 ciphertextHash, bytes32 keyCommitment, uint8 state, bool truthBondClaimed, bool zkClaimVerified, uint256 claimedAmount)",
   "function nextReportId() view returns (uint256)",
+  "function nextDisputeId() view returns (uint256)",
   "function reportProperty(uint256) view returns (bytes32)",
   "function reportMetadata(uint256) view returns (string propertyAddress, string intelligenceType)",
   "function setReportMetadata(uint256 reportId, string propertyAddress, string intelligenceType)",
@@ -31,6 +32,7 @@ const CONTRACT_ABI = [
   "function arbitratorLosses(address) view returns (uint256)",
   "function openDispute(uint256 reportId) payable returns (uint256)",
   "function getDisputePanel(uint256 disputeId) view returns (address[])",
+  "function disputes(uint256) view returns (uint256 reportId, uint256 commitDeadline, uint256 revealDeadline, uint256 yesVotes, uint256 noVotes, uint256 rewardPool, bool resolved)",
   "function commitVote(uint256 disputeId, bytes32 commitment)",
   "function revealVote(uint256 disputeId, bool sellerValid, bytes32 salt)",
   "function resolveDispute(uint256 disputeId)",
@@ -163,6 +165,7 @@ export default function Home() {
   const [sellerOpen, setSellerOpen] = useState(false);
   const [arbitratorOpen, setArbitratorOpen] = useState(false);
   const [arbitratorStats, setArbitratorStats] = useState(null);
+  const [arbitrationCases, setArbitrationCases] = useState([]);
   const [disputeForm, setDisputeForm] = useState({ id: "", vote: "true", salt: "" });
   const [sellerForm, setSellerForm] = useState({ property: "2301 Telegraph Ave", type: "Security deposit history", price: "0.01", deadline: "60", intelligence: "", evidence: "", evidenceFile: null, claimedAmount: "3800" });
   const [vaultItems, setVaultItems] = useState([]);
@@ -272,8 +275,8 @@ export default function Home() {
           fallbackPosition: { left: `${35 + (id % 5) * 8}%`, top: `${35 + (Math.floor(id / 5) % 5) * 7}%` },
           priceLabel: formatPrice(report.price),
           reports: "1 on-chain report",
-          corroboration: report.zkClaimVerified ? "ZK claim verified" : "Commitment recorded",
-          level: report.zkClaimVerified ? "ZK verified" : "Evidence committed",
+          corroboration: report.zkClaimVerified ? "Claim checked privately" : "Seller evidence recorded",
+          level: report.zkClaimVerified ? "Private claim checked" : "Evidence on file",
           price: formatPrice(report.price),
           eth: ethers.formatEther(report.price),
           seller: formatSeller(report.seller),
@@ -294,8 +297,20 @@ export default function Home() {
             return location ? { ...report, ...location } : report;
           } catch { return report; }
         }));
-        setReports(geocoded);
-        setProperties(geocoded.map((report) => ({ id: `report-${report.id}`, address: report.address, neighborhood: report.neighborhood, beds: report.beds, rent: report.rent, reports: 1, freshness: report.freshness, reportIds: [report.id], coordinates: report.coordinates, fallbackPosition: report.fallbackPosition })));
+        const sellerHistory = geocoded.reduce((history, report) => {
+          const key = report.sellerAddress.toLowerCase();
+          const current = history.get(key) || { total: 0, settled: 0, negative: 0, verified: 0 };
+          current.total++; current.settled += report.state === "Settled" ? 1 : 0; current.negative += ["Invalid", "Refunded"].includes(report.state) ? 1 : 0; current.verified += report.zkClaimVerified ? 1 : 0;
+          history.set(key, current); return history;
+        }, new Map());
+        const withTrust = geocoded.map((report) => {
+          const history = sellerHistory.get(report.sellerAddress.toLowerCase());
+          const score = Math.max(0, Math.min(100, 50 + history.settled * 12 + history.verified * 8 - history.negative * 25));
+          const advice = score >= 75 ? "Established on-chain history" : score >= 50 ? "New or mixed on-chain history" : "Review collateral and evidence carefully";
+          return { ...report, trustScore: score, trustAdvice: advice, level: `Trust ${score}/100 · ${advice}`, reports: `${history.total} seller listing${history.total === 1 ? "" : "s"}` };
+        });
+        setReports(withTrust);
+        setProperties(withTrust.map((report) => ({ id: `report-${report.id}`, address: report.address, neighborhood: report.neighborhood, beds: report.beds, rent: report.rent, reports: 1, freshness: report.freshness, reportIds: [report.id], coordinates: report.coordinates, fallbackPosition: report.fallbackPosition })));
         setBackend({ state: "connected", message: `Live contract connected: ${count} report${count === 1 ? "" : "s"} loaded.` });
       } catch (error) {
         setBackend({ state: "warning", message: `Backend unavailable: showing demo metadata. ${error.shortMessage || "Check the RPC URL and contract address."}` });
@@ -311,7 +326,7 @@ export default function Home() {
     }
     const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
     setAccount(accounts[0]);
-    setStatus("Wallet connected. Reports remain locked until escrow is confirmed.");
+    setStatus("Wallet connected. Report details stay private until you buy.");
   }
 
   async function loadArbitratorStats() {
@@ -320,6 +335,19 @@ export default function Home() {
     const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, CONTRACT_ABI, provider);
     const [stake, wins, losses] = await Promise.all([contract.arbitratorStake(account), contract.arbitratorWins(account), contract.arbitratorLosses(account)]);
     setArbitratorStats({ stake: ethers.formatEther(stake), wins: wins.toString(), losses: losses.toString() });
+  }
+
+  async function loadArbitrationCases() {
+    if (!process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || !window.ethereum) return;
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const contract = new ethers.Contract(process.env.NEXT_PUBLIC_CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+    const count = Number(await contract.nextDisputeId());
+    const now = Math.floor(Date.now() / 1000);
+    const cases = await Promise.all(Array.from({ length: count }, async (_, id) => {
+      const [dispute, panel] = await Promise.all([contract.disputes(id), contract.getDisputePanel(id)]);
+      return { id, reportId: dispute.reportId.toString(), commitDeadline: Number(dispute.commitDeadline), revealDeadline: Number(dispute.revealDeadline), resolved: dispute.resolved, selected: Boolean(account && panel.some((member) => member.toLowerCase() === account.toLowerCase())), phase: now <= Number(dispute.commitDeadline) ? "Commit" : now <= Number(dispute.revealDeadline) ? "Reveal" : "Ready to resolve" };
+    }));
+    setArbitrationCases(cases.filter((item) => !item.resolved));
   }
 
   async function runArbitratorAction(action) {
@@ -522,9 +550,13 @@ export default function Home() {
         : action === "refund"
           ? await contract.claimRefund(activeReport.id)
           : await contract.claimTruthBond(activeReport.id);
-      await tx.wait();
+      const receipt = await tx.wait();
       setReloadNonce((value) => value + 1);
-      setStatus(action === "dispute" ? "Dispute opened; selected arbitrators can now commit votes." : action === "refund" ? "Refund claimed on-chain." : "Truth bond claimed on-chain.");
+      if (action === "dispute") {
+        const disputeId = receipt.logs.map((log) => { try { return contract.interface.parseLog(log); } catch { return null; } }).find((log) => log?.name === "DisputeOpened")?.args?.disputeId?.toString();
+        setDisputeForm((current) => ({ ...current, id: disputeId || current.id }));
+        setStatus(`Dispute #${disputeId ?? "created"} opened; selected arbitrators can now commit votes.`);
+      } else setStatus(action === "refund" ? "Refund claimed on-chain." : "Truth bond claimed on-chain.");
     } catch (error) { setStatus(error.shortMessage || error.message || "Protocol action failed."); }
     finally { setBusy(false); }
   }
@@ -623,6 +655,7 @@ export default function Home() {
     setSelectedReport(null);
     setArbitratorOpen(true);
     loadArbitratorStats();
+    loadArbitrationCases();
     setStatus("");
   }
 
@@ -670,8 +703,8 @@ export default function Home() {
               <label>Private evidence file<input name="evidenceFile" type="file" onChange={updateSellerField} required /></label>
               <label>Claimed amount<input name="claimedAmount" type="number" min="0" step="1" value={sellerForm.claimedAmount} onChange={updateSellerField} required /></label>
               <div className="form-row"><label>Price / ETH<input name="price" type="number" min="0.0001" step="0.0001" value={sellerForm.price} onChange={updateSellerField} required /></label><label>Delivery window<span className="meta-value">60 min · automatic</span></label></div>
-              <div className="commitment-preview"><div><span className="meta-label">Evidence commitment</span><span className="commitment">{evidenceCommitment}</span></div><div><span className="meta-label">Report commitment</span><span className="commitment">{reportCommitment}</span></div></div>
-              <div className="seller-note"><LockKeyhole size={14} /><span>Evidence is hashed locally. Never paste leases, emails, names, or plaintext source documents into a public transaction.</span></div>
+              <div className="commitment-preview"><div><span className="meta-label">Private evidence check</span><span className="commitment">{evidenceCommitment}</span></div><div><span className="meta-label">Report proof</span><span className="commitment">{reportCommitment}</span></div></div>
+              <div className="seller-note"><LockKeyhole size={14} /><span>Your file stays private. We only save a fingerprint that lets buyers check they received the right report.</span></div>
               <div className="seller-costs"><div><span>Listing price</span><strong>{sellerForm.price || "0"} ETH</strong></div><div><span>Truth bond</span><strong>{SELLER_TRUTH_BOND_ETH} ETH</strong></div><div><span>Delivery bond</span><strong>{SELLER_DELIVERY_BOND_ETH} ETH</strong></div><div><span>Protocol fee</span><strong>{PROTOCOL_FEE_ETH} ETH</strong></div><div className="seller-total"><span>Required now</span><strong>{(Number(sellerForm.price || 0) + Number(SELLER_TRUTH_BOND_ETH) + Number(SELLER_DELIVERY_BOND_ETH) + Number(PROTOCOL_FEE_ETH)).toFixed(4)} ETH</strong></div></div>
               <button className="primary-button" type="submit" disabled={busy}>{busy ? "Publishing listing..." : account ? "Publish committed listing" : "Connect wallet to publish"}<ArrowUpRight size={14} /></button>
               {status && <div className="status"><Zap size={11} /> {status}</div>}
@@ -681,10 +714,12 @@ export default function Home() {
             <button className="back-button" onClick={() => setArbitratorOpen(false)}><ArrowLeft size={14} /> Back to nearby places</button>
             <div className="panel-kicker"><span><span className="pulse" /> Arbitrator console</span><span>STAKED WORK</span></div>
             <h2 className="property-name">Resolve fairly.</h2>
-            <p className="seller-intro">Stake to join dispute panels, commit privately, reveal later, and earn only when your vote agrees with the majority.</p>
-            <div className="detail-grid"><div><span className="meta-label">Your stake</span><span className="meta-value">{arbitratorStats?.stake || "0"} ETH</span></div><div><span className="meta-label">Majority votes</span><span className="meta-value">{arbitratorStats?.wins || "0"}</span></div><div><span className="meta-label">Minority / missed</span><span className="meta-value">{arbitratorStats?.losses || "0"}</span></div></div>
+            <p className="seller-intro">Put down a small refundable stake to help decide buyer complaints. Cast your vote privately first, then reveal it after the voting window closes.</p>
+            <div className="detail-grid"><div><span className="meta-label">Your deposit</span><span className="meta-value">{arbitratorStats?.stake || "0"} ETH</span></div><div><span className="meta-label">Votes with majority</span><span className="meta-value">{arbitratorStats?.wins || "0"}</span></div><div><span className="meta-label">Missed / minority votes</span><span className="meta-value">{arbitratorStats?.losses || "0"}</span></div></div>
+            <div className="section-head"><h3 className="section-title">Open arbitration cases</h3><span className="section-count">{arbitrationCases.length}</span></div>
+            {arbitrationCases.length ? arbitrationCases.map((item) => <button className="vault-item" key={item.id} onClick={() => setDisputeForm((current) => ({ ...current, id: String(item.id) }))}><div><span className="meta-label">Dispute #{item.id} · Report #{item.reportId}</span><strong>{item.phase}{item.selected ? " · You are selected" : ""}</strong><span>Commit ends {new Date(item.commitDeadline * 1000).toLocaleTimeString()} · Reveal ends {new Date(item.revealDeadline * 1000).toLocaleTimeString()}</span></div></button>) : <p className="seller-intro">No open disputes. Refresh this console after a buyer opens one.</p>}
             <div className="seller-costs"><button className="primary-button" disabled={busy} onClick={() => runArbitratorAction("register")}>Stake 0.01 ETH</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("withdraw")}>Withdraw 0.01 ETH</button></div>
-            <div className="seller-form"><label>Dispute ID<input value={disputeForm.id} onChange={(event) => setDisputeForm((current) => ({ ...current, id: event.target.value }))} placeholder="0" /></label><label>Vote<select value={disputeForm.vote} onChange={(event) => setDisputeForm((current) => ({ ...current, vote: event.target.value }))}><option value="true">Seller valid</option><option value="false">Seller invalid</option></select></label><label>Vote salt<input value={disputeForm.salt} onChange={(event) => setDisputeForm((current) => ({ ...current, salt: event.target.value }))} placeholder="0x... bytes32" /></label><div className="seller-costs"><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("commit")}>Commit vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reveal")}>Reveal vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve")}>Resolve panel</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve-timeout")}>Resolve missed votes</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reward")}>Claim reward</button></div></div>
+            <div className="seller-form"><label>Dispute ID<input value={disputeForm.id} onChange={(event) => setDisputeForm((current) => ({ ...current, id: event.target.value }))} placeholder="0" /></label><label>Vote<select value={disputeForm.vote} onChange={(event) => setDisputeForm((current) => ({ ...current, vote: event.target.value }))}><option value="true">Seller valid</option><option value="false">Seller invalid</option></select></label><label>Vote salt<div className="form-row"><input value={disputeForm.salt} onChange={(event) => setDisputeForm((current) => ({ ...current, salt: event.target.value }))} placeholder="0x... bytes32" /><button className="vault-action" type="button" onClick={() => setDisputeForm((current) => ({ ...current, salt: ethers.hexlify(crypto.getRandomValues(new Uint8Array(32))) }))}>Generate</button></div></label><div className="seller-costs"><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("commit")}>Commit vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reveal")}>Reveal vote</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve")}>Resolve panel</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("resolve-timeout")}>Resolve missed votes</button><button className="vault-action" disabled={busy} onClick={() => runArbitratorAction("reward")}>Claim reward</button></div></div>
             {status && <div className="status"><Zap size={11} /> {status}</div>}
           </div> : !selectedProperty ? <div className="discovery-view">
             <div className="panel-kicker"><span><span className="pulse" /> Near your location</span><span>BERKELEY, CA</span></div>

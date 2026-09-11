@@ -5,7 +5,8 @@ export function GET(request) {
     version: "1.0",
     endpoints: {
       listings: `${origin}/api/marketplace/reports`,
-      purchaseIntent: `${origin}/api/agents/purchase`
+      purchaseIntent: `${origin}/api/agents/purchase`,
+      protocolActions: `${origin}/api/agents/actions`
     },
     note: "Purchase endpoints return unsigned transaction requests. Agents retain wallet custody and sign transactions themselves."
   });
