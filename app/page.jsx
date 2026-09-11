@@ -13,6 +13,7 @@ const CONTRACT_ABI = [
   "function nextReportId() view returns (uint256)",
   "function nextDisputeId() view returns (uint256)",
   "function reportProperty(uint256) view returns (bytes32)",
+  "function propertyCorroborationCount(bytes32) view returns (uint256)",
   "function reportMetadata(uint256) view returns (string propertyAddress, string intelligenceType)",
   "function setReportMetadata(uint256 reportId, string propertyAddress, string intelligenceType)",
   "function purchaseReport(uint256 reportId) payable",
@@ -118,9 +119,9 @@ async function getOrCreateArbitratorKey(address) {
   localStorage.setItem(storageKey, JSON.stringify({ publicKey, privateKey }));
   return publicKey;
 }
-function readDeliveryVault() {
+function readDeliveryVault(owner) {
   if (typeof window === "undefined") return [];
-  return Object.keys(localStorage).filter((key) => key.startsWith(DELIVERY_VAULT_PREFIX)).map((key) => JSON.parse(localStorage.getItem(key))).filter(Boolean);
+  return Object.keys(localStorage).filter((key) => key.startsWith(DELIVERY_VAULT_PREFIX)).map((key) => JSON.parse(localStorage.getItem(key))).filter((item) => item && (!owner || item.seller?.toLowerCase() === owner.toLowerCase()));
 }
 async function encryptPrivateReport(report, evidenceFile) {
   const encoder = new TextEncoder();
@@ -197,9 +198,7 @@ export default function Home() {
   const headlineInitialized = useRef(false);
   const publishInFlightRef = useRef(false);
 
-  useEffect(() => {
-    setVaultItems(readDeliveryVault());
-  }, []);
+  useEffect(() => { setVaultItems(readDeliveryVault(account)); }, [account]);
 
   useEffect(() => {
     const target = selectedProperty ? `${selectedProperty.address}\n${selectedProperty.neighborhood}` : defaultHeadline;
@@ -273,11 +272,12 @@ export default function Home() {
         }
         const liveReports = await Promise.all(Array.from({ length: count }, async (_, id) => {
           const [report, propertyId] = await Promise.all([contract.reports(id), contract.reportProperty(id)]);
+          const corroborationCount = propertyId === ethers.ZeroHash ? 0n : await contract.propertyCorroborationCount(propertyId);
           let metadata = ["", ""];
           try { metadata = await contract.reportMetadata(id); } catch { /* legacy contract */ }
-          return { report, propertyId, propertyAddress: metadata[0], intelligenceType: metadata[1] };
+          return { report, propertyId, corroborationCount, propertyAddress: metadata[0], intelligenceType: metadata[1] };
         }));
-        const normalized = liveReports.map(({ report, propertyId, propertyAddress, intelligenceType }, id) => ({
+        const normalized = liveReports.map(({ report, propertyId, corroborationCount, propertyAddress, intelligenceType }, id) => ({
           id,
           title: intelligenceType || "Encrypted tenant report",
           description: "Private property intelligence. Inspect its on-chain provenance before purchase.",
@@ -291,7 +291,8 @@ export default function Home() {
           fallbackPosition: { left: `${35 + (id % 5) * 8}%`, top: `${35 + (Math.floor(id / 5) % 5) * 7}%` },
           priceLabel: formatPrice(report.price),
           reports: "1 on-chain report",
-          corroboration: report.zkClaimVerified ? "Claim checked privately" : "Seller evidence recorded",
+          corroboration: `${corroborationCount.toString()} local corroboration${corroborationCount === 1n ? "" : "s"}`,
+          corroborationCount: Number(corroborationCount),
           level: report.zkClaimVerified ? "Private claim checked" : "Evidence on file",
           price: formatPrice(report.price),
           eth: ethers.formatEther(report.price),
@@ -315,13 +316,13 @@ export default function Home() {
         }));
         const sellerHistory = geocoded.reduce((history, report) => {
           const key = report.sellerAddress.toLowerCase();
-          const current = history.get(key) || { total: 0, settled: 0, negative: 0, verified: 0 };
-          current.total++; current.settled += report.state === "Settled" ? 1 : 0; current.negative += ["Invalid", "Refunded"].includes(report.state) ? 1 : 0; current.verified += report.zkClaimVerified ? 1 : 0;
+          const current = history.get(key) || { total: 0, settled: 0, invalid: 0, refunded: 0, verified: 0, corroborations: 0 };
+          current.total++; current.settled += report.state === "Settled" ? 1 : 0; current.invalid += report.state === "Invalid" ? 1 : 0; current.refunded += report.state === "Refunded" ? 1 : 0; current.verified += report.zkClaimVerified ? 1 : 0; current.corroborations += report.corroborationCount;
           history.set(key, current); return history;
         }, new Map());
         const withTrust = geocoded.map((report) => {
           const history = sellerHistory.get(report.sellerAddress.toLowerCase());
-          const score = Math.max(0, Math.min(100, 50 + history.settled * 12 + history.verified * 8 - history.negative * 25));
+          const score = Math.max(0, Math.min(100, 50 + history.settled * 12 + history.verified * 8 + Math.min(12, history.corroborations * 3) - history.refunded * 15 - history.invalid * 30));
           const advice = score >= 75 ? "Established on-chain history" : score >= 50 ? "New or mixed on-chain history" : "Review collateral and evidence carefully";
           return { ...report, trustScore: score, trustAdvice: advice, level: `Trust ${score}/100 · ${advice}`, reports: `${history.total} seller listing${history.total === 1 ? "" : "s"}` };
         });
@@ -471,14 +472,14 @@ export default function Home() {
         try { return contract.interface.parseLog(log); } catch { return null; }
       }).find((log) => log?.name === "ReportListed");
       const reportId = listedLog?.args?.reportId?.toString() || (await contract.nextReportId() - 1n).toString();
-      const delivery = { reportId, ...encrypted, reportCommitment: commitment, zkProof: proof, property: sellerForm.property, type: sellerForm.type, delivered: false, precommitted: false };
+      const delivery = { reportId, ...encrypted, reportCommitment: commitment, zkProof: proof, property: sellerForm.property, type: sellerForm.type, seller: account, delivered: false, precommitted: false };
       // Upload only after public discovery metadata is committed. Delivery and
       // proof failures can no longer leave a listing with anonymous dummy data.
       if (!await uploadDeliveryPackage(delivery, true)) throw new Error("Could not preload the encrypted delivery package.");
       await (await contract.verifyClaim(reportId, proof.proofA, proof.proofB, proof.proofC, proof.publicSignals)).wait();
       try {
         localStorage.setItem(`${DELIVERY_VAULT_PREFIX}${reportId}`, JSON.stringify({ ...delivery, delivered: true, precommitted: true }));
-        setVaultItems(readDeliveryVault());
+        setVaultItems(readDeliveryVault(account));
       } catch {
         // The server copy is authoritative for delivery; localStorage has a
         // small quota and is only a seller convenience cache.
@@ -509,7 +510,7 @@ export default function Home() {
       await tx.wait();
       const delivered = { ...item, delivered: true };
       localStorage.setItem(`${DELIVERY_VAULT_PREFIX}${item.reportId}`, JSON.stringify(delivered));
-      setVaultItems(readDeliveryVault());
+      setVaultItems(readDeliveryVault(account));
       setReloadNonce((value) => value + 1);
       setStatus("Encrypted delivery committed. The buyer can now retrieve and verify it.");
     } catch (error) {
@@ -519,6 +520,11 @@ export default function Home() {
 
   async function decryptSelectedReport() {
     if (!activeReport) return;
+    if (!account) { setStatus("Connect the wallet that purchased this report to open it."); return; }
+    if (activeReport.buyer?.toLowerCase() !== account.toLowerCase()) {
+      setStatus("Only the wallet that purchased this report can open it.");
+      return;
+    }
     let delivery = JSON.parse(localStorage.getItem(`${DELIVERY_VAULT_PREFIX}${activeReport.id}`) || "null");
     if (!delivery) {
       const retrieved = await fetchDeliveryPackage(activeReport.id);
@@ -656,7 +662,7 @@ export default function Home() {
       const delivery = await response.json();
       if (!response.ok) throw new Error(delivery.error || "Download failed");
       localStorage.setItem(`${DELIVERY_VAULT_PREFIX}${delivery.reportId}`, JSON.stringify(delivery));
-      setVaultItems(readDeliveryVault());
+      setVaultItems(readDeliveryVault(account));
       setStatus("Encrypted delivery retrieved. Verify it against the on-chain commitments before decrypting.");
       return true;
     } catch (error) { setStatus(error.message || "Could not fetch package."); return false; }
@@ -671,7 +677,7 @@ export default function Home() {
         const delivery = JSON.parse(reader.result);
         if (!delivery.reportId || !delivery.ciphertext || !delivery.key || !delivery.ciphertextHash || !delivery.keyCommitment) throw new Error("Invalid delivery package");
         localStorage.setItem(`${DELIVERY_VAULT_PREFIX}${delivery.reportId}`, JSON.stringify(delivery));
-        setVaultItems(readDeliveryVault());
+        setVaultItems(readDeliveryVault(account));
         setStatus("Encrypted delivery imported. The package will be checked against the on-chain commitments before decryption.");
       } catch (error) {
         setStatus(error.message || "Could not import delivery package.");
@@ -686,6 +692,16 @@ export default function Home() {
     ? selectedProperty.reportIds.map((id) => reports.find((report) => report.id === id)).filter(Boolean)
     : [];
   const activeReport = selectedReport ? reports.find((report) => report.id === selectedReport.id) || selectedReport : selectedReports[0];
+
+  useEffect(() => {
+    const canOpen = Boolean(account && activeReport?.buyer?.toLowerCase() === account.toLowerCase());
+    document.querySelectorAll("button").forEach((button) => {
+      if (button.textContent?.includes("Decrypt and verify package locally")) {
+        button.disabled = busy || !canOpen;
+        button.setAttribute("aria-disabled", String(busy || !canOpen));
+      }
+    });
+  }, [account, activeReport, busy]);
 
   function selectProperty(property) {
     setSelectedProperty(property);
@@ -761,8 +777,8 @@ export default function Home() {
               <label>Claimed amount<input name="claimedAmount" type="number" min="0" step="1" value={sellerForm.claimedAmount} onChange={updateSellerField} required /></label>
               <div className="form-row"><label>Price / ETH<input name="price" type="number" min="0.0001" step="0.0001" value={sellerForm.price} onChange={updateSellerField} required /></label><label>Delivery window<span className="meta-value">60 min · automatic</span></label></div>
               <div className="commitment-preview"><div><span className="meta-label">Private evidence check</span><span className="commitment">{evidenceCommitment}</span></div><div><span className="meta-label">Report proof</span><span className="commitment">{reportCommitment}</span></div></div>
-              <div className="seller-note"><LockKeyhole size={14} /><span>Your file stays private. We only save a fingerprint that lets buyers check they received the right report.</span></div>
-              <div className="seller-costs"><div><span>Listing price</span><strong>{sellerForm.price || "0"} ETH</strong></div><div><span>Truth bond</span><strong>{SELLER_TRUTH_BOND_ETH} ETH</strong></div><div><span>Delivery bond</span><strong>{SELLER_DELIVERY_BOND_ETH} ETH</strong></div><div><span>Protocol fee</span><strong>{PROTOCOL_FEE_ETH} ETH</strong></div><div className="seller-total"><span>Required now</span><strong>{(Number(sellerForm.price || 0) + Number(SELLER_TRUTH_BOND_ETH) + Number(SELLER_DELIVERY_BOND_ETH) + Number(PROTOCOL_FEE_ETH)).toFixed(4)} ETH</strong></div></div>
+              <div className="seller-note"><LockKeyhole size={14} /><span>Only make claims you can support with the evidence you provide. If a buyer successfully disputes a claim, the sale can be reversed, your bond can be reduced, and your future trust score may fall. Your file stays private; we only save a fingerprint so the delivered report can be checked.</span></div>
+              <div className="seller-costs"><div><span>Listing price</span><strong>{sellerForm.price || "0"} ETH</strong></div><div><span>Truth bond</span><strong>{SELLER_TRUTH_BOND_ETH} ETH</strong></div><div><span>Delivery bond</span><strong>{SELLER_DELIVERY_BOND_ETH} ETH</strong></div><div><span>Protocol fee</span><strong>{PROTOCOL_FEE_ETH} ETH</strong></div><div className="seller-total"><span>Required now</span><strong>{(Number(SELLER_TRUTH_BOND_ETH) + Number(SELLER_DELIVERY_BOND_ETH) + Number(PROTOCOL_FEE_ETH)).toFixed(4)} ETH</strong></div></div>
               <button className="primary-button" type="submit" disabled={busy}>{busy ? "Publishing listing..." : account ? "Publish committed listing" : "Connect wallet to publish"}<ArrowUpRight size={14} /></button>
               {status && <div className="status"><Zap size={11} /> {status}</div>}
             </form>
@@ -792,7 +808,7 @@ export default function Home() {
             <div className="panel-kicker"><span><span className="pulse" /> Property selected</span><span>UNIT 04</span></div>
             <h2 className="property-name">{selectedProperty.address}</h2>
             <div className="property-meta">{selectedProperty.neighborhood.toUpperCase()} · {selectedProperty.beds.toUpperCase()}</div>
-            <div className="rent-row"><span className="rent">{selectedProperty.rent}</span><span className="rent-note">asking / month</span></div>
+            <div className="rent-row"><span className="rent">{selectedProperty.rent}</span><span className="rent-note">state</span></div>
             <div className="rule" />
             <div className="section-head"><h3 className="section-title">Available intelligence</h3><span className="section-count">{String(selectedReports.length).padStart(2, "0")} LISTINGS</span></div>
             {selectedReports.filter((item) => item.title.toLowerCase().includes(search.toLowerCase())).map((item) => <button key={item.id} className={`intel-card ${activeReport?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedReport(item)}><div className="card-top"><h4 className="card-title">{item.title}</h4><span className="card-price">{item.price}</span></div><p className="card-sub">{item.description}</p><div className="card-bottom"><span className="badge"><ShieldCheck size={11} /> {item.level}</span><span className="corroboration">{item.reports} · {item.corroboration}</span></div></button>)}

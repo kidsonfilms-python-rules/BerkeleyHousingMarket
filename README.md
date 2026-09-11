@@ -2,11 +2,11 @@
 
 ## Vertical
 
-I've been spending the past few days looking at options for apartments next year (just moved into dorms btw) and I found a lack of quality tenant experiances in these places. Outta the Units (play on words with getting outta the projects) is a marketplace for private, property-specific Berkeley rental intelligence. Current and former tenants can sell information about deposit returns, maintenance history, lease clauses, and living conditions to prospective renters. Listings publish a property address, report category, price, collateral, and cryptographic commitments; the underlying report and supporting evidence remain encrypted until purchase.
+I've been spending the past few days looking at options for apartments next year (just moved into dorms btw) and I found a lack of quality tenant experiances in these places. Outta the Units (play on words with getting outta the projects) is a marketplace for private, property-specific Berkeley rental intelligence. Current and former tenants can sell information about deposit returns, maintenance history, lease clauses, and living conditions to prospective renters. Listings publish a property address, report category, price, collateral, and cryptographic commitments; the underlying report and supporting evidence remain encrypted until purchase. Anyone can buy this information, from prospective renters trying to sus out their options to even competing landlords looking at what people think about their competition (and they are more likeley to agenticly buy this info).
 
 ## Trust assumptions
 
-The protocol assumes the blockchain correctly holds escrow, records commitments, enforces deadlines, and resolves the contract’s stated outcomes. Sellers stake truth and delivery bonds, buyers can verify delivered ciphertext/key commitments locally, and disputes are decided through a staked commit-reveal random arbitrator panel. Evidence commitments and ZK claim verification establish that a seller committed to particular private material and amount; they do not prove that every subjective housing claim is objectively true.
+The protocol assumes the blockchain correctly holds escrow, records commitments, enforces deadlines, and resolves the contract’s stated outcomes. Sellers stake truth and delivery bonds, buyers can verify delivered ciphertext/key commitments locally, and disputes are decided through a staked commit-reveal random arbitrator panel. Evidence commitments and ZK claim verification establish that a seller committed to particular private material and amount; they do not prove that every subjective housing claim is objectively true. Also, during disputes, even though the documents are shown to random arbitrators, at that point the information is already purchased and considered "public".
 
 ## Biggest design decision
 
@@ -14,4 +14,4 @@ The marketplace uses on-chain escrow and precommitted encrypted delivery. A sell
 
 ## Important limitation
 
-This is paid early access, not permanent DRM. The buyer cannot inspect the report before paying, but after delivery a buyer can copy it and share it to anyone they please. In the current settlement design, the key revealed to confirm delivery is public on-chain, so anyone who later obtains the ciphertext package could decrypt it. Permanent buyer-exclusive access would require buyer-specific encryption, proxy/threshold re-encryption, or a trusted key-release system.
+Many of the most meaningful rental claims cannot be objectively verified quickly. A deposit outcome may only be clear after move-out, a maintenance pattern can take months to establish, and a landlord response may depend on facts outside the protocol. Outta the Units can verify that a seller committed to evidence and delivered the promised encrypted package, but it cannot immediately verify that every real-world claim is true. Bonds, corroboration, disputes, and later reputation outcomes reduce this risk; they do not eliminate it.
