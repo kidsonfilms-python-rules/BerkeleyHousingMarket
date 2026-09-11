@@ -1,3 +1,5 @@
+<img width="1206" height="478" alt="otu logo (1)" src="https://github.com/user-attachments/assets/4803c2bc-b0d8-4633-b4bc-497fa567bed5" /> <br/>
+
 # Outta the Units
 
 ## Vertical
