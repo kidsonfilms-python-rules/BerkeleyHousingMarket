@@ -1,4 +1,5 @@
-![Project Header Image](assets/otu logo.png)
+<img width="1206" height="478" alt="otu logo (1)" src="https://github.com/user-attachments/assets/2f22d5c2-3938-4d22-8228-1f01db155e59" /><br/>
+
 # Outta the Units
 
 Outta the Units is an on-chain escrow and provenance layer for private, property-specific Berkeley housing intelligence. A former tenant can sell an encrypted report about a unit without putting their lease, email, or other private evidence on-chain.
