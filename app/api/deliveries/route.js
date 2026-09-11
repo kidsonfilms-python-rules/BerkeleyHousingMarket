@@ -7,11 +7,14 @@ export const runtime = "nodejs";
 
 const storePath = path.join(process.cwd(), ".delivery-store");
 const AUTH_MAX_AGE_MS = 5 * 60 * 1000;
+const MAX_PACKAGE_CHARS = 12 * 1024 * 1024;
 const ABI = ["function reports(uint256) view returns (address seller,address buyer,uint256,uint256,uint256,uint256,uint256,uint256,bytes32,bytes32,bytes32,uint8,bool,bool,uint256)"];
 
 function packagePath(reportId) {
   return path.join(storePath, `${String(reportId)}.json`);
 }
+
+function validReportId(reportId) { return /^\d+$/.test(String(reportId)); }
 
 function message(action, reportId, timestamp) { return `Outta the Units delivery ${action} authorization\nReport ID: ${reportId}\nIssued at: ${timestamp}`; }
 async function authorize(action, reportId, address, timestamp, signature, role) {
@@ -21,6 +24,7 @@ async function authorize(action, reportId, address, timestamp, signature, role) 
   const rpcUrl = process.env.RPC_URL || process.env.NEXT_PUBLIC_RPC_URL;
   const contractAddress = process.env.CONTRACT_ADDRESS || process.env.NEXT_PUBLIC_CONTRACT_ADDRESS;
   if (!rpcUrl || !contractAddress) throw new Error("delivery service contract is not configured");
+  if (!validReportId(reportId)) throw new Error("invalid reportId");
   const report = await new ethers.Contract(contractAddress, ABI, new ethers.JsonRpcProvider(rpcUrl)).reports(reportId);
   const owner = role === "seller" ? report.seller : report.buyer;
   if (owner.toLowerCase() !== address.toLowerCase()) throw new Error(`only the on-chain ${role} is authorized`);
@@ -30,7 +34,8 @@ async function authorize(action, reportId, address, timestamp, signature, role) 
 export async function POST(request) {
   try {
     const body = await request.json();
-    if (body?.reportId === undefined || body?.reportId === null || !body?.ciphertext || !body?.key || !body?.ciphertextHash || !body?.keyCommitment) return Response.json({ error: "invalid encrypted delivery package" }, { status: 400 });
+    if (body?.reportId === undefined || body?.reportId === null || !body?.ciphertext || !body?.key || !body?.ciphertextHash || !body?.keyCommitment || !validReportId(body.reportId)) return Response.json({ error: "invalid encrypted delivery package" }, { status: 400 });
+    if (JSON.stringify(body).length > MAX_PACKAGE_CHARS) return Response.json({ error: "delivery package exceeds 12 MB limit" }, { status: 413 });
     await authorize("upload", body.reportId, body.authorization?.address, body.authorization?.timestamp, body.authorization?.signature, "seller");
     const token = randomBytes(24).toString("hex");
     await mkdir(storePath, { recursive: true });

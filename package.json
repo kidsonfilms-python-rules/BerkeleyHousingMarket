@@ -9,6 +9,7 @@
     "zk:build": "node scripts/build-zk.js",
     "zk:smoke": "node scripts/zk-smoke.js",
     "seed:sepolia": "node scripts/seed-sepolia.js",
+    "deliveries:release-listener": "node scripts/release-deliveries.js",
     "cli": "node scripts/cli.js",
     "dev": "next dev",
     "build": "next build",

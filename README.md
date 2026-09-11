@@ -6,7 +6,7 @@ I've been spending the past few days looking at options for apartments next year
 
 ## Trust assumptions
 
-The protocol assumes the blockchain correctly holds escrow, records commitments, enforces deadlines, and resolves the contract’s stated outcomes. Sellers stake truth and delivery bonds, buyers can verify delivered ciphertext/key commitments locally, and disputes are decided through a staked commit-reveal random arbitrator panel. Evidence commitments and ZK claim verification establish that a seller committed to particular private material and amount; they do not prove that every subjective housing claim is objectively true. Also, during disputes, even though the documents are shown to random arbitrators, at that point the information is already purchased and considered "public".
+The protocol assumes the blockchain correctly holds escrow, records commitments, enforces deadlines, and resolves the contract’s stated outcomes. Sellers stake truth and delivery bonds, buyers can verify delivered ciphertext/key commitments locally, and disputes are decided through a staked commit-reveal arbitrator panel. Evidence commitments and ZK claim verification establish that a seller committed to particular private material and amount; they do not prove that every potentially subjective housing claim (fully subjective claims are discouraged) is objectively true. During a dispute, either party may submit private evidence encrypted to the selected panel; the backend cannot decide the outcome or move funds.
 
 ## Biggest design decision
 
@@ -14,4 +14,4 @@ The marketplace uses on-chain escrow and precommitted encrypted delivery. A sell
 
 ## Important limitation
 
-Many of the most meaningful rental claims cannot be objectively verified quickly. A deposit outcome may only be clear after move-out, a maintenance pattern can take months to establish, and a landlord response may depend on facts outside the protocol. Outta the Units can verify that a seller committed to evidence and delivered the promised encrypted package, but it cannot immediately verify that every real-world claim is true. Bonds, corroboration, disputes, and later reputation outcomes reduce this risk; they do not eliminate it.
+Many of the most meaningful rental claims cannot be objectively verified quickly. A deposit outcome may only be clear after move-out, a maintenance pattern can take months to establish, and a landlord response may depend on facts outside the protocol. Outta the Units can verify that a seller committed to evidence and delivered the promised encrypted package, but it cannot immediately verify that every real-world claim is true. Bonds, corroboration, disputes, and later reputation outcomes reduce this risk; they do not eliminate it. It is also paid early access rather than permanent DRM: a buyer can copy a report after disclosure.

@@ -10,6 +10,8 @@ typechain-types/
 .env.production.local
 coverage/
 .delivery-store/
+.dispute-evidence-store/
+.release-listener-state.json
 .DS_Store
 scripts/test.sh
 

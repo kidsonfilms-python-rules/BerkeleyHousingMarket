@@ -1,94 +1,69 @@
 # Outta the Units API
 
-Base URL: `https://outtatheunits.siddharthray.com/api/`
+Base URL: `https://your-host/api`. The API never receives an agent's private
+key and never submits transactions. It returns unsigned Sepolia transaction
+requests; the agent must simulate, sign, and submit them with its own wallet.
 
-The agent-facing endpoints never custody a wallet or sign a transaction. An
-agent uses the returned unsigned transaction request with its own wallet.
+## Discover reports
 
-## Discovery
+- `GET /api` lists API entry points.
+- `GET /api/marketplace/reports` returns every on-chain listing, public
+  property/category metadata, seller, price, state, commitments, and a ready
+  to sign purchase transaction.
+- `POST /api/agents/purchase` with `{ "reportId": 0 }` returns an unsigned
+  `purchaseReport` transaction for an available report.
 
-### `GET /api`
+## Protocol transactions
 
-Returns the available public API endpoints.
-
-### `GET /api/marketplace/reports`
-
-Returns the configured contract, chain ID, and every on-chain report. Each
-report includes its state, price, evidence commitment, ZK-verification status,
-and a ready-to-sign `purchaseReport` transaction object.
-
-## Agent purchase preparation
-
-### `POST /api/agents/purchase`
-
-Builds an unsigned purchase transaction for an available listing.
-
-Request:
+`POST /api/agents/actions` builds every other unsigned contract transaction.
+Every successful response has:
 
 ```json
-{ "reportId": 0 }
+{ "transaction": { "chainId": 11155111, "to": "0x...", "value": "0", "data": "0x..." } }
 ```
 
-Successful response:
+| `action` | Required fields | What it prepares |
+| --- | --- | --- |
+| `createListing` | `reportCommitment`, `priceWei`, `deliveryDeadline`, `challengePeriod`, `truthBondWei`, `deliveryBondWei`, `propertyAddress`, `intelligenceType`, `ciphertextHash`, `keyCommitment` | Atomic precommitted listing |
+| `verifyClaim` | `reportId`, `proofA`, `proofB`, `proofC`, `publicSignals` | ZK claim verification |
+| `purchase` | `reportId` | Purchase escrow |
+| `confirmDelivery` | `reportId`, `ciphertextHash`, `key` | Buyer settlement after local verification |
+| `dispute` | `reportId` | Buyer challenge; includes the fixed 0.001 ETH bond |
+| `refund` / `truthBond` / `corroborate` | `reportId` | Refund, seller bond claim, or corroboration |
+| `registerArbitrator` | none | Arbitrator registration; includes the fixed 0.01 ETH stake |
+| `setArbitratorEncryptionKey` | `publicKey` | Store the panel X25519 public key |
+| `withdrawArbitrator` | `amountWei` | Withdraw unlocked arbitrator stake |
+| `commitVote` | `disputeId`, `commitment` | Commit a panel verdict |
+| `revealVote` | `disputeId`, `sellerValid`, `salt` | Reveal a committed verdict |
+| `resolveDispute` / `resolveTimeout` / `claimArbitratorReward` | `disputeId` | Resolve or claim an arbitrator reward |
 
-```json
-{
-  "transaction": {
-    "chainId": 11155111,
-    "to": "0x…",
-    "value": "10000000000000000",
-    "data": "0x…"
-  }
-}
-```
+`GET /api/agents/actions` returns current disputes, deadlines, panels, and
+resolution status. Agents should read contract state again immediately before
+broadcasting, because an unsigned request can become stale.
 
-The agent must check the chain ID, then sign and submit this transaction with
-its own wallet. The contract atomically records the buyer and locks the price
-in escrow.
+## Encrypted delivery and disputes
 
-## Encrypted delivery transport
+`POST /api/deliveries` accepts a seller's encrypted package. `GET
+/api/deliveries` lets the on-chain buyer retrieve it after escrow purchase.
+Both use a signed five-minute wallet authorization; the server rechecks the
+on-chain seller/buyer. The buyer verifies commitments and decrypts locally.
 
-### `POST /api/deliveries`
+`POST /api/disputes/evidence` accepts buyer/seller envelopes encrypted to the
+selected panel's keys. `GET /api/disputes/evidence` lets only selected,
+signed-in panel members retrieve those opaque envelopes.
 
-Sellers upload an encrypted package after their listing exists on-chain. The
-request includes the package plus a wallet signature for the exact upload
-authorization message. The service verifies that signer is the report's
-on-chain seller before storing the package.
+`POST /api/deliveries/release` is a server-to-server endpoint for a confirmed
+`ReportPurchased` listener. It requires `Authorization: Bearer
+$DELIVERY_CALLBACK_SECRET` and never moves funds.
 
-### `GET /api/deliveries`
-
-Buyers retrieve a package using `reportId`, `address`, `timestamp`, and
-`signature` query parameters. The service verifies the signed request, checks
-that the address is the report's on-chain buyer, and requires the report to be
-in a deliverable state. Authorizations expire after five minutes.
-
-The package is encrypted; the buyer verifies its ciphertext and key commitments
-against the contract before decrypting locally and calling `confirmDelivery`.
-
-## Purchase callback
-
-### `POST /api/deliveries/release`
-
-Configure a confirmed `ReportPurchased` event worker to call this endpoint:
-
-```http
-Authorization: Bearer $DELIVERY_CALLBACK_SECRET
-Content-Type: application/json
-
-{"reportId":"0"}
-```
-
-The callback re-checks the report on-chain and records the buyer eligible for
-the package. It is idempotent: retries are safe. It never moves funds; payment
-is released only by the buyer's on-chain `confirmDelivery` transaction.
-
-## Required server environment
+## Required environment
 
 ```env
 RPC_URL=https://your-sepolia-rpc
-CONTRACT_ADDRESS=0xYourV2Contract
-DELIVERY_CALLBACK_SECRET=long-random-server-only-secret
+CONTRACT_ADDRESS=0xYourDeployedContract
+DELIVERY_CALLBACK_SECRET=a-long-random-server-only-secret
 ```
 
-Do not expose `DELIVERY_CALLBACK_SECRET`, private keys, or agent wallet keys
-through `NEXT_PUBLIC_*` variables.
+Never put private keys or `DELIVERY_CALLBACK_SECRET` in `NEXT_PUBLIC_*` values.
+The prototype uses server-local storage for encrypted packages and evidence;
+configure persistent access-controlled storage before a real deployment.
