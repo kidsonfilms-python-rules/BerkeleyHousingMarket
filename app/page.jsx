@@ -764,6 +764,7 @@ export default function Home() {
         <div className="brand"><Image className="brand-logo" src={logo} alt="Outta the Units" priority /></div>
         <div className="top-actions">
           <span className="network"><span className="network-dot" /> Sepolia testnet</span>
+          <a className="sell-button" href="/api-docs">API docs</a>
           <button className="sell-button" onClick={openSeller}><FilePenLine size={14} /> Sell intelligence</button>
           <button className="sell-button" onClick={openArbitrator}><ShieldCheck size={14} /> Arbitrate</button>
           <button className={`wallet ${account ? "connected" : ""}`} onClick={connectWallet}>
