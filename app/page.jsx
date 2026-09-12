@@ -708,7 +708,16 @@ export default function Home() {
     event.target.value = "";
   }
 
-  const filteredReports = reports.filter((item) => item.title.toLowerCase().includes(search.toLowerCase()));
+  const searchTerm = search.trim().toLowerCase();
+  const matchesSearch = (value) => String(value || "").toLowerCase().includes(searchTerm);
+  const visibleProperties = !searchTerm ? properties : properties.filter((property) => {
+    const propertyMatches = [property.address, property.neighborhood, property.beds, property.rent].some(matchesSearch);
+    const reportMatches = property.reportIds.some((id) => {
+      const report = reports.find((item) => item.id === id);
+      return report && [report.title, report.description, report.seller, report.level].some(matchesSearch);
+    });
+    return propertyMatches || reportMatches;
+  });
   const selectedReports = selectedProperty
     ? selectedProperty.reportIds.map((id) => reports.find((report) => report.id === id)).filter(Boolean)
     : [];
@@ -727,6 +736,7 @@ export default function Home() {
   function selectProperty(property) {
     setSelectedProperty(property);
     setSelectedReport(reports.find((report) => report.id === property.reportIds[0]) || reports[0]);
+    setSearch("");
     setStatus("");
   }
 
@@ -774,7 +784,7 @@ export default function Home() {
       </header>
       <div className="main">
         <section className="map-stage">
-          <MapView locations={properties} selectedId={selectedProperty?.id} onSelect={selectProperty} />
+          <MapView locations={visibleProperties} selectedId={selectedProperty?.id} onSelect={selectProperty} />
           <div className="map-top">
             <div><div className="eyebrow">Private intelligence / Berkeley, CA</div><h1 className="map-title">{headlineText.split("\n").map((line, index) => <span className="headline-line" key={`${line}-${index}`}>{line || "\u00a0"}</span>)}</h1></div>
             <label className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search an address or neighborhood" /></label>
@@ -822,10 +832,10 @@ export default function Home() {
           </div> : !selectedProperty ? <div className="discovery-view">
             <div className="panel-kicker"><span><span className="pulse" /> Near your location</span><span>BERKELEY, CA</span></div>
             <h2 className="property-name">Find your next place.</h2>
-            <div className="property-meta"><MapPin size={11} /> {properties.length} {backend.state === "connected" ? "live Sepolia listings" : "spots with tenant intelligence nearby"}</div>
+            <div className="property-meta"><MapPin size={11} /> {visibleProperties.length} {searchTerm ? "matching properties" : backend.state === "connected" ? "live Sepolia listings" : "spots with tenant intelligence nearby"}</div>
             <div className="rule" />
-            <div className="section-head"><h3 className="section-title">{backend.state === "connected" ? "Live campus listings" : "Places near you"}</h3><span className="section-count">{properties.length} SPOTS</span></div>
-            {properties.length > 0 ? <div className="place-list">{properties.map((property) => <button key={property.id} className="place-card" onClick={() => selectProperty(property)}><div className="place-card-top"><div><span className="place-neighborhood">{property.neighborhood}</span><h4>{property.address}</h4></div><ArrowUpRight size={15} /></div><div className="place-card-meta"><span>{property.beds}</span><strong>{property.rent}{property.rent === "On-chain" ? "" : <small> / mo</small>}</strong></div><div className="place-card-foot"><span><ShieldCheck size={11} /> {property.reports} {backend.state === "connected" ? "on-chain report" : "reports"}</span><span>{property.freshness}</span></div></button>)}</div> : <div className="locked-content"><LockKeyhole size={19} color="#bdc7ff" /><p>No listings have been written to this contract yet.</p></div>}
+            <div className="section-head"><h3 className="section-title">{searchTerm ? "Search results" : backend.state === "connected" ? "Live campus listings" : "Places near you"}</h3><span className="section-count">{visibleProperties.length} SPOTS</span></div>
+            {visibleProperties.length > 0 ? <div className="place-list">{visibleProperties.map((property) => <button key={property.id} className="place-card" onClick={() => selectProperty(property)}><div className="place-card-top"><div><span className="place-neighborhood">{property.neighborhood}</span><h4>{property.address}</h4></div><ArrowUpRight size={15} /></div><div className="place-card-meta"><span>{property.beds}</span><strong>{property.rent}{property.rent === "On-chain" ? "" : <small> / mo</small>}</strong></div><div className="place-card-foot"><span><ShieldCheck size={11} /> {property.reports} {backend.state === "connected" ? "on-chain report" : "reports"}</span><span>{property.freshness}</span></div></button>)}</div> : <div className="locked-content"><Search size={19} color="#bdc7ff" /><p>{searchTerm ? `No properties or report categories match “${search.trim()}”.` : "No listings have been written to this contract yet."}</p></div>}
           </div> : <div className="details-view">
             <button className="back-button" onClick={clearSelection}><ArrowLeft size={14} /> All nearby places</button>
             <div className="panel-kicker"><span><span className="pulse" /> Property selected</span><span>RENTED</span></div>
@@ -834,7 +844,7 @@ export default function Home() {
             <div className="rent-row"><span className="rent">{selectedProperty.rent}</span><span className="rent-note">state</span></div>
             <div className="rule" />
             <div className="section-head"><h3 className="section-title">Available intelligence</h3><span className="section-count">{String(selectedReports.length).padStart(2, "0")} LISTINGS</span></div>
-            {selectedReports.filter((item) => item.title.toLowerCase().includes(search.toLowerCase())).map((item) => <button key={item.id} className={`intel-card ${activeReport?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedReport(item)}><div className="card-top"><h4 className="card-title">{item.title}</h4><span className="card-price">{item.price}</span></div><p className="card-sub">{item.description}</p><div className="card-bottom"><span className="badge"><ShieldCheck size={11} /> {item.level}</span><span className="corroboration">{item.reports} · {item.corroboration}</span></div></button>)}
+            {selectedReports.map((item) => <button key={item.id} className={`intel-card ${activeReport?.id === item.id ? "selected" : ""}`} onClick={() => setSelectedReport(item)}><div className="card-top"><h4 className="card-title">{item.title}</h4><span className="card-price">{item.price}</span></div><p className="card-sub">{item.description}</p><div className="card-bottom"><span className="badge"><ShieldCheck size={11} /> {item.level}</span><span className="corroboration">{item.reports} · {item.corroboration}</span></div></button>)}
             {activeReport?.state === "Delivered" && activeReport.buyer?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("dispute")}>Open dispute · stake 0.001 ETH</button>}
             {activeReport?.state === "Purchased" && activeReport.buyer?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("refund")}>Claim missed-delivery refund</button>}
             {activeReport?.state === "Settled" && activeReport.sellerAddress?.toLowerCase() === account.toLowerCase() && <button className="vault-action" disabled={busy} onClick={() => runReportAction("truth")}>Claim truth bond</button>}
